@@ -1,1 +1,2 @@
 
+{"from_version": "01", "hypothesis": {"confidence": 0.58, "path": "entry.threshold", "reason": "realised return is below target, so loosen RSI entry by 2", "value": 32.0}, "metrics": {"max_drawdown": 0.0, "realised_return": 0.0, "sharpe": 0.0}, "mode": "fallback", "score": 0.0, "timestamp": 1780000637, "to_version": "02"}

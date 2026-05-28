@@ -33,7 +33,7 @@ async def fetch(asset: str = "BTC/USDT") -> dict[str, Any]:
         "developer_data": "false",
         "sparkline": "false",
     }
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await client.get(url, params=params)
         response.raise_for_status()
         data = response.json()

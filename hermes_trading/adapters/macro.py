@@ -15,7 +15,7 @@ STOOQ_VIX_URL = "https://stooq.com/q/l/?s=vix&i=d"
 
 
 async def _quote(url: str) -> dict[str, str]:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         response = await client.get(url)
         response.raise_for_status()
     rows = list(csv.DictReader(io.StringIO(response.text)))

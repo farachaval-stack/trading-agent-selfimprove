@@ -32,7 +32,7 @@ def _rsi(closes: list[float], period: int = 14) -> float:
 
 async def fetch(asset: str = "BTC/USDT") -> dict[str, Any]:
     params = {"symbol": _symbol(asset), "interval": "1m", "limit": 60}
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         response = await client.get(BINANCE_URL, params=params)
         response.raise_for_status()
         rows = response.json()

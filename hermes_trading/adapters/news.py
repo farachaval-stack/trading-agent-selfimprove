@@ -13,7 +13,7 @@ RSS_URL = "https://www.coindesk.com/arc/outboundfeeds/rss/"
 
 
 async def fetch(asset: str = "BTC/USDT") -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         response = await client.get(RSS_URL)
         response.raise_for_status()
 
