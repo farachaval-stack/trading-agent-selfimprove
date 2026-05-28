@@ -35,6 +35,8 @@ async def fetch(asset: str = "BTC/USDT") -> dict[str, Any]:
     }
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await client.get(url, params=params)
+        if response.status_code == 429:
+            return require_schema(_rate_limited_payload(asset), "onchain")
         response.raise_for_status()
         data = response.json()
 
@@ -49,3 +51,15 @@ async def fetch(asset: str = "BTC/USDT") -> dict[str, Any]:
         "price_change_24h_pct": market.get("price_change_percentage_24h"),
     }
     return require_schema(payload, "onchain")
+
+
+def _rate_limited_payload(asset: str) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source": "coingecko_public_rate_limited",
+        "asset": asset,
+        "timestamp": int(time.time()),
+        "market_cap_usd": None,
+        "volume_24h_usd": None,
+        "price_change_24h_pct": None,
+    }
