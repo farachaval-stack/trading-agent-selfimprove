@@ -13,8 +13,10 @@ COPY pyproject.toml ./
 COPY hermes_trading ./hermes_trading
 COPY prompts ./prompts
 COPY state ./state
+COPY state ./state.defaults
 
 RUN uv sync
 
 ENV HERMES_TRADING_MODE=paper
+ENV HERMES_TRADING_DEFAULT_STATE_DIR=/app/state.defaults
 CMD ["uv", "run", "python", "-m", "hermes_trading.run"]
