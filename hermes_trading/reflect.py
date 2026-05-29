@@ -14,6 +14,10 @@ from .score import metrics, score
 
 
 ALLOWED_PATHS = {"entry.threshold", "stop_loss_pct", "position_size_r"}
+RSI_THRESHOLD_MIN = 5.0
+RSI_THRESHOLD_MAX = 80.0
+POSITION_SIZE_MIN = 0.1
+POSITION_SIZE_MAX = 2.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,8 +53,8 @@ def main() -> None:
     )
 
 
-def reflect_once(mode: str = "fallback", dry_run: bool = False) -> dict[str, Any]:
-    trades = _read_trades()
+def reflect_once(mode: str = "fallback", dry_run: bool = False, trades: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    trades = _read_trades() if trades is None else trades
     goal = load_yaml(GOAL_FILE)
     strategy = load_yaml(STRATEGY_FILE)
 
@@ -90,6 +94,23 @@ def _fallback_hypothesis(trades: list[dict[str, Any]], goal: dict[str, Any], str
     observed = metrics(trades)
     target = float(goal.get("target_return_30d", 0.05))
     max_dd = float(goal.get("max_drawdown", 0.08))
+    current_threshold = float(strategy.get("entry", {}).get("threshold", 30))
+
+    if current_threshold > RSI_THRESHOLD_MAX:
+        return {
+            "path": "entry.threshold",
+            "value": RSI_THRESHOLD_MAX,
+            "reason": "RSI threshold exceeded its valid operating range, so reset it to the safety cap",
+            "confidence": 0.95,
+        }
+
+    if current_threshold < RSI_THRESHOLD_MIN:
+        return {
+            "path": "entry.threshold",
+            "value": RSI_THRESHOLD_MIN,
+            "reason": "RSI threshold fell below its valid operating range, so reset it to the safety floor",
+            "confidence": 0.95,
+        }
 
     if observed["max_drawdown"] > max_dd:
         current = float(strategy.get("stop_loss_pct", 2.0))
@@ -101,10 +122,17 @@ def _fallback_hypothesis(trades: list[dict[str, Any]], goal: dict[str, Any], str
         }
 
     if observed["realised_return"] < target:
-        current = float(strategy.get("entry", {}).get("threshold", 30))
+        if current_threshold >= RSI_THRESHOLD_MAX:
+            current_size = float(strategy.get("position_size_r", 0.5))
+            return {
+                "path": "position_size_r",
+                "value": round(max(POSITION_SIZE_MIN, current_size - 0.1), 2),
+                "reason": "realised return is below target and RSI threshold is capped, so reduce position risk",
+                "confidence": 0.56,
+            }
         return {
             "path": "entry.threshold",
-            "value": round(current + 2, 2),
+            "value": round(min(RSI_THRESHOLD_MAX, current_threshold + 2), 2),
             "reason": "realised return is below target, so loosen RSI entry by 2",
             "confidence": 0.58,
         }
@@ -112,7 +140,7 @@ def _fallback_hypothesis(trades: list[dict[str, Any]], goal: dict[str, Any], str
     current = float(strategy.get("position_size_r", 0.5))
     return {
         "path": "position_size_r",
-        "value": round(min(2.0, current + 0.1), 2),
+        "value": round(min(POSITION_SIZE_MAX, current + 0.1), 2),
         "reason": "goals are currently met, so test a small position-size increase",
         "confidence": 0.51,
     }
@@ -164,11 +192,13 @@ def _apply_hypothesis(strategy: dict[str, Any], hypothesis: dict[str, Any]) -> d
     updated = json.loads(json.dumps(strategy))
     path = hypothesis["path"]
     if path == "entry.threshold":
-        updated.setdefault("entry", {})["threshold"] = hypothesis["value"]
+        updated.setdefault("entry", {})["threshold"] = _clamp(
+            float(hypothesis["value"]), RSI_THRESHOLD_MIN, RSI_THRESHOLD_MAX
+        )
     elif path == "stop_loss_pct":
         updated["stop_loss_pct"] = hypothesis["value"]
     elif path == "position_size_r":
-        updated["position_size_r"] = hypothesis["value"]
+        updated["position_size_r"] = _clamp(float(hypothesis["value"]), POSITION_SIZE_MIN, POSITION_SIZE_MAX)
     else:
         raise ValueError(f"unsupported hypothesis path: {path}")
     updated["version"] = _next_version(str(strategy.get("version", "01")))
@@ -230,6 +260,10 @@ def _changed_paths(left: dict[str, Any], right: dict[str, Any], prefix: str = ""
 
 def _next_version(version: str) -> str:
     return f"{int(version) + 1:02d}"
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return round(max(low, min(high, value)), 4)
 
 
 if __name__ == "__main__":

@@ -18,10 +18,11 @@ from .paths import (
     STRATEGY_FILE,
     ensure_state_dirs,
 )
-from .reflect import _read_trades, reflect_once
+from .reflect import RSI_THRESHOLD_MAX, RSI_THRESHOLD_MIN, _read_trades, reflect_once
 
 
 DEFAULT_INTERVAL_SECONDS = 300
+DEFAULT_MIN_REFLECTION_SECONDS = 1800
 LOCK_TIMEOUT_SECONDS = 900
 
 
@@ -74,19 +75,39 @@ def check_and_reflect(mode: str = "fallback") -> dict[str, Any]:
     reflection_every = int(goal.get("reflection_every", 5))
     trades = _closed_trades()
     checkpoint = _load_checkpoint(trades)
+    repair_due = _strategy_needs_repair()
+    cooldown_remaining = _cooldown_remaining(checkpoint)
     new_trades = [trade for trade in trades if _closed_at(trade) > int(checkpoint.get("last_reflected_closed_at", 0))]
 
-    if len(new_trades) < reflection_every:
+    if cooldown_remaining > 0 and not repair_due:
+        return {
+            "reflected": False,
+            "new_trade_count": len(new_trades),
+            "reflection_every": reflection_every,
+            "cooldown_remaining": cooldown_remaining,
+        }
+
+    if len(new_trades) < reflection_every and not repair_due:
         return {"reflected": False, "new_trade_count": len(new_trades), "reflection_every": reflection_every}
 
     with _reflection_lock():
         trades = _closed_trades()
         checkpoint = _load_checkpoint(trades)
+        repair_due = _strategy_needs_repair()
+        cooldown_remaining = _cooldown_remaining(checkpoint)
         new_trades = [trade for trade in trades if _closed_at(trade) > int(checkpoint.get("last_reflected_closed_at", 0))]
-        if len(new_trades) < reflection_every:
+        if cooldown_remaining > 0 and not repair_due:
+            return {
+                "reflected": False,
+                "new_trade_count": len(new_trades),
+                "reflection_every": reflection_every,
+                "cooldown_remaining": cooldown_remaining,
+            }
+        if len(new_trades) < reflection_every and not repair_due:
             return {"reflected": False, "new_trade_count": len(new_trades), "reflection_every": reflection_every}
 
-        result = reflect_once(mode=mode)
+        reflection_trades = new_trades if new_trades else trades[-reflection_every:]
+        result = reflect_once(mode=mode, trades=reflection_trades)
         latest_trade = max((_closed_at(trade) for trade in trades), default=0)
         _write_checkpoint(
             {
@@ -106,6 +127,7 @@ def check_and_reflect(mode: str = "fallback") -> dict[str, Any]:
             "to_version": result.get("to_version"),
             "changed_path": result["hypothesis"]["path"],
             "changed_value": result["hypothesis"]["value"],
+            "repair_due": repair_due,
         }
 
 
@@ -115,14 +137,14 @@ def _closed_trades() -> list[dict[str, Any]]:
 
 def _load_checkpoint(trades: list[dict[str, Any]]) -> dict[str, Any]:
     if REFLECTION_STATE_FILE.exists():
-        with REFLECTION_STATE_FILE.open("r", encoding="utf-8") as handle:
+        with REFLECTION_STATE_FILE.open("r", encoding="utf-8-sig") as handle:
             data = json.load(handle)
         if isinstance(data, dict):
             return data
 
     last_reflection_ts = _last_hypothesis_timestamp()
     return {
-        "timestamp": int(time.time()),
+        "timestamp": last_reflection_ts,
         "last_reflected_closed_at": last_reflection_ts,
         "last_reflected_trade_count": len([trade for trade in trades if _closed_at(trade) <= last_reflection_ts]),
         "last_reflected_trade_id": None,
@@ -177,12 +199,39 @@ def _closed_at(trade: dict[str, Any]) -> int:
     return int(trade.get("closed_at", 0))
 
 
+def _strategy_needs_repair() -> bool:
+    strategy = load_yaml(STRATEGY_FILE)
+    threshold = float(strategy.get("entry", {}).get("threshold", 30))
+    return threshold < RSI_THRESHOLD_MIN or threshold > RSI_THRESHOLD_MAX
+
+
 def _interval_seconds() -> int:
     try:
         goal = load_yaml(GOAL_FILE)
         return int(os.getenv("HERMES_REFLECTION_INTERVAL_SECONDS", goal.get("reflection_interval_seconds", DEFAULT_INTERVAL_SECONDS)))
     except Exception:
         return DEFAULT_INTERVAL_SECONDS
+
+
+def _cooldown_remaining(checkpoint: dict[str, Any]) -> int:
+    last_reflection = int(checkpoint.get("timestamp", 0))
+    if last_reflection <= 0:
+        return 0
+    remaining = _min_reflection_seconds() - (int(time.time()) - last_reflection)
+    return max(0, remaining)
+
+
+def _min_reflection_seconds() -> int:
+    try:
+        goal = load_yaml(GOAL_FILE)
+        return int(
+            os.getenv(
+                "HERMES_MIN_REFLECTION_SECONDS",
+                goal.get("min_reflection_seconds", DEFAULT_MIN_REFLECTION_SECONDS),
+            )
+        )
+    except Exception:
+        return DEFAULT_MIN_REFLECTION_SECONDS
 
 
 if __name__ == "__main__":
