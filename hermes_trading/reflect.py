@@ -28,34 +28,59 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     ensure_state_dirs()
     args = parse_args()
-    trades = _read_trades()
-    goal = load_yaml(GOAL_FILE)
-    strategy = load_yaml(STRATEGY_FILE)
+    mode = "fallback" if args.fallback else "hermes"
 
     if args.hermes and args.dry_run:
+        trades = _read_trades()
+        goal = load_yaml(GOAL_FILE)
+        strategy = load_yaml(STRATEGY_FILE)
         print(_hermes_prompt(trades[-25:], goal, strategy))
         print(f"hermes_command_found={bool(shutil.which('hermes'))}")
         return
 
-    if args.fallback:
-        hypothesis = _fallback_hypothesis(trades, goal, strategy)
-    else:
-        hypothesis = _hermes_hypothesis(trades[-25:], goal, strategy)
-
+    result = reflect_once(mode=mode, dry_run=args.dry_run)
     if args.dry_run:
-        print(json.dumps(hypothesis, indent=2, sort_keys=True))
+        print(json.dumps(result["hypothesis"], indent=2, sort_keys=True))
         return
 
+    print(
+        f"reflected {result['from_version']} -> {result['to_version']}: "
+        f"{result['hypothesis']['path']}={result['hypothesis']['value']}"
+    )
+
+
+def reflect_once(mode: str = "fallback", dry_run: bool = False) -> dict[str, Any]:
+    trades = _read_trades()
+    goal = load_yaml(GOAL_FILE)
+    strategy = load_yaml(STRATEGY_FILE)
+
+    if mode == "fallback":
+        hypothesis = _fallback_hypothesis(trades, goal, strategy)
+    elif mode == "hermes":
+        hypothesis = _hermes_hypothesis(trades[-25:], goal, strategy)
+    else:
+        raise ValueError(f"unsupported reflection mode: {mode}")
+
+    result = {
+        "from_version": strategy.get("version"),
+        "hypothesis": hypothesis,
+    }
+    if dry_run:
+        return result
+
     updated = _apply_hypothesis(strategy, hypothesis)
-    _persist(strategy, updated, hypothesis, trades, goal, "fallback" if args.fallback else "hermes")
-    print(f"reflected {strategy.get('version')} -> {updated.get('version')}: {hypothesis['path']}={hypothesis['value']}")
+    _validate_single_variable_change(strategy, updated, hypothesis)
+    record = _persist(strategy, updated, hypothesis, trades, goal, mode)
+    result["to_version"] = updated.get("version")
+    result["record"] = record
+    return result
 
 
 def _read_trades() -> list[dict[str, Any]]:
     if not TRADES_FILE.exists():
         return []
     trades = []
-    for line in TRADES_FILE.read_text(encoding="utf-8").splitlines():
+    for line in TRADES_FILE.read_text(encoding="utf-8-sig").splitlines():
         if line.strip():
             trades.append(json.loads(line))
     return trades
@@ -157,7 +182,7 @@ def _persist(
     trades: list[dict[str, Any]],
     goal: dict[str, Any],
     mode: str,
-) -> None:
+) -> dict[str, Any]:
     old_version = str(previous.get("version", "01"))
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     write_yaml(HISTORY_DIR / f"v{old_version}.yaml", previous)
@@ -174,6 +199,33 @@ def _persist(
     }
     with HYPOTHESES_FILE.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
+    return record
+
+
+def _validate_single_variable_change(
+    previous: dict[str, Any], updated: dict[str, Any], hypothesis: dict[str, Any]
+) -> None:
+    changed = set(_changed_paths(previous, updated)) - {"version"}
+    expected = hypothesis.get("path")
+    if changed != {expected}:
+        raise ValueError(f"reflection must change exactly one variable; changed={sorted(changed)} expected={expected}")
+    if expected not in ALLOWED_PATHS:
+        raise ValueError(f"unsupported hypothesis path: {expected}")
+    if str(updated.get("version")) != _next_version(str(previous.get("version", "01"))):
+        raise ValueError("reflection must bump version by exactly one")
+
+
+def _changed_paths(left: dict[str, Any], right: dict[str, Any], prefix: str = "") -> list[str]:
+    paths = []
+    for key in sorted(set(left) | set(right)):
+        path = f"{prefix}.{key}" if prefix else str(key)
+        left_value = left.get(key)
+        right_value = right.get(key)
+        if isinstance(left_value, dict) and isinstance(right_value, dict):
+            paths.extend(_changed_paths(left_value, right_value, path))
+        elif left_value != right_value:
+            paths.append(path)
+    return paths
 
 
 def _next_version(version: str) -> str:

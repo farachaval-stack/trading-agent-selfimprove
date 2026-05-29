@@ -14,6 +14,9 @@ TRADES_FILE = STATE_DIR / "trades.jsonl"
 HYPOTHESES_FILE = STATE_DIR / "hypotheses.jsonl"
 HEARTBEAT_FILE = STATE_DIR / "heartbeat.json"
 HISTORY_DIR = STATE_DIR / "history"
+REFLECTION_STATE_FILE = STATE_DIR / "reflection_state.json"
+REFLECTION_LOCK_FILE = STATE_DIR / "reflection.lock"
+REFLECTION_ERRORS_FILE = STATE_DIR / "reflection_errors.jsonl"
 
 SEEDED_FILES = (
     "goal.yaml",

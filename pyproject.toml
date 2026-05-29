@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 hermes-trading = "hermes_trading.run:main"
 hermes-briefing = "hermes_trading.briefing:main"
+hermes-scheduler = "hermes_trading.scheduler:main"
 
 [build-system]
 requires = ["hatchling"]
